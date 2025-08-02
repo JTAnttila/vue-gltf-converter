@@ -1,11 +1,11 @@
 <template>
   <div id="app">
-    <GltfConverterApp />
+    <GltfToolLayout />
   </div>
 </template>
 
 <script setup lang="ts">
-import GltfConverterApp from './components/GltfConverterApp.vue'
+import GltfToolLayout from './components/GltfToolLayout.vue'
 </script>
 
 <style>

@@ -10,9 +10,11 @@
     </div>
     
     <TresCanvas 
-      v-if="gltfScene"
       v-bind="canvasConfig" 
       class="tres-canvas"
+      window-size
+      @created="onCanvasCreated"
+      @contextmenu.prevent
     >
       <!-- Camera -->
       <TresPerspectiveCamera 
@@ -21,37 +23,24 @@
       />
       
       <!-- Lighting Setup -->
-      <TresAmbientLight :intensity="0.2" />
+      <TresAmbientLight :intensity="0.4" />
       <TresDirectionalLight 
         :position="[10, 10, 5]" 
         :intensity="props.intensity * 0.8"
-        :cast-shadow="props.shadows"
+        :cast-shadow="false"
       />
-      
-      <!-- Environment -->
-      <Suspense>
-        <Environment 
-          v-if="props.environment !== 'none'"
-          :preset="props.environment"
-          :background="false"
-        />
-      </Suspense>
       
       <!-- Scene Content -->
       <TresGroup>
-        <!-- Contact Shadows -->
-        <ContactShadows 
-          v-if="props.contactShadow"
-          :opacity="0.3"
-          :scale="10"
-          :blur="2"
-          :far="5"
-          :resolution="256"
-          :position="[0, -1, 0]"
-        />
+        <!-- Debug: Default scene for testing -->
+        <TresMesh v-if="!gltfScene" :position="[0, 0, 0]">
+          <TresBoxGeometry :args="[1, 1, 1]" />
+          <TresMeshStandardMaterial color="hotpink" />
+        </TresMesh>
         
         <!-- GLTF Model -->
         <primitive 
+          v-if="gltfScene"
           :object="gltfScene"
           @click="onModelClick"
         />
@@ -64,8 +53,10 @@
         :enable-damping="true"
         :damping-factor="0.05"
         :max-polar-angle="Math.PI"
-        :min-distance="1"
-        :max-distance="1000"
+        :min-distance="0.5"
+        :max-distance="50"
+        :enable-zoom="true"
+        :enable-pan="true"
       />
     </TresCanvas>
   </div>
@@ -113,22 +104,26 @@ const boundingBox = ref<THREE.Box3 | null>(null)
 // Computed
 const canvasConfig = computed(() => ({
   clearColor: '#f0f0f0',
-  shadows: props.shadows,
+  shadows: false, // Disable shadows to prevent proxy errors
   alpha: true,
   antialias: true,
-  preserveDrawingBuffer: true,
+  preserveDrawingBuffer: false,
   powerPreference: 'high-performance' as const
 }))
 
 const cameraPosition = computed((): [number, number, number] => {
-  if (!boundingBox.value) return [5, 5, 5]
+  if (!boundingBox.value || !gltfScene.value) {
+    return [3, 3, 3] // Default position when no model
+  }
   
   const box = boundingBox.value
   const size = box.getSize(new THREE.Vector3())
   const maxDim = Math.max(size.x, size.y, size.z)
-  const distance = maxDim * 2
   
-  return [distance, distance * 0.5, distance]
+  // Ensure minimum distance even for very small models
+  const distance = Math.max(maxDim * 2.5, 5)
+  
+  return [distance, distance * 0.7, distance]
 })
 
 // Methods
@@ -179,11 +174,21 @@ async function loadGLTF() {
 
     // Parse GLTF
     const gltf = await new Promise<any>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error('GLTF loading timeout after 30 seconds'))
+      }, 30000)
+
       loader.parse(
         gltfBuffer,
         props.fileName.includes('/') ? props.fileName.substring(0, props.fileName.lastIndexOf('/') + 1) : '',
-        resolve,
-        reject
+        (result) => {
+          clearTimeout(timeoutId)
+          resolve(result)
+        },
+        (error) => {
+          clearTimeout(timeoutId)
+          reject(error)
+        }
       )
     })
 
@@ -192,13 +197,16 @@ async function loadGLTF() {
 
     // Process the loaded scene
     gltfData.value = gltf
-    gltfScene.value = gltf.scene
+    
+    // Clone the scene to avoid proxy issues
+    const clonedScene = gltf.scene.clone()
+    gltfScene.value = clonedScene
 
     // Setup shadows and materials
-    setupScene(gltf.scene)
+    setupScene(clonedScene)
     
     // Calculate bounding box for camera positioning
-    calculateBoundingBox(gltf.scene)
+    calculateBoundingBox(clonedScene)
 
     console.log('GLTF loaded successfully:', gltf)
 
@@ -214,9 +222,9 @@ async function loadGLTF() {
 function setupScene(scene: THREE.Object3D) {
   scene.traverse((child) => {
     if (child instanceof THREE.Mesh) {
-      // Enable shadows
-      child.castShadow = props.shadows
-      child.receiveShadow = props.shadows
+      // Disable shadows to prevent proxy errors
+      child.castShadow = false
+      child.receiveShadow = false
       
       // Enhance materials
       if (child.material) {
@@ -242,28 +250,50 @@ function calculateBoundingBox(scene: THREE.Object3D) {
   const box = new THREE.Box3().setFromObject(scene)
   boundingBox.value = box
   
+  // Get the size of the bounding box
+  const size = box.getSize(new THREE.Vector3())
+  const maxDim = Math.max(size.x, size.y, size.z)
+  
   // Center the scene
   const center = box.getCenter(new THREE.Vector3())
   scene.position.sub(center)
+  
+  // Scale very small models up
+  if (maxDim < 0.5) {
+    const scale = 2 / maxDim
+    scene.scale.setScalar(scale)
+    console.log(`Scaling model by ${scale.toFixed(2)} (original size: ${maxDim.toFixed(4)})`)
+  }
+  
+  // Scale very large models down
+  if (maxDim > 20) {
+    const scale = 10 / maxDim
+    scene.scale.setScalar(scale)
+    console.log(`Scaling model by ${scale.toFixed(2)} (original size: ${maxDim.toFixed(2)})`)
+  }
 }
 
 function onModelClick(event: any) {
   console.log('Model clicked:', event)
 }
 
-// Watch for prop changes
-watch(() => [props.buffers, props.fileName], () => {
-  loadGLTF()
-}, { immediate: true })
-
-watch(() => props.shadows, (newShadows) => {
-  if (gltfScene.value) {
-    setupScene(gltfScene.value)
+function onCanvasCreated({ renderer }: { renderer: THREE.WebGLRenderer }) {
+  try {
+    // Disable shadows completely to prevent proxy errors
+    renderer.shadowMap.enabled = false
+    renderer.outputColorSpace = THREE.SRGBColorSpace
+    
+    // Set safer rendering options
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    
+    console.log('Canvas created successfully')
+  } catch (error) {
+    console.warn('Error setting up renderer:', error)
   }
-})
+}
 
-// Cleanup
-onUnmounted(() => {
+// Cleanup function
+function cleanup() {
   if (gltfScene.value) {
     // Cleanup Three.js resources
     gltfScene.value.traverse((child) => {
@@ -276,7 +306,25 @@ onUnmounted(() => {
         }
       }
     })
+    gltfScene.value = null
   }
+}
+
+// Watch for prop changes
+watch(() => [props.buffers, props.fileName], () => {
+  cleanup() // Clean up previous scene
+  loadGLTF()
+}, { immediate: true })
+
+watch(() => props.shadows, (newShadows) => {
+  if (gltfScene.value) {
+    setupScene(gltfScene.value)
+  }
+})
+
+// Cleanup on unmount
+onUnmounted(() => {
+  cleanup()
 })
 </script>
 
@@ -289,11 +337,14 @@ onUnmounted(() => {
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .tres-canvas {
-  width: 100%;
-  height: 100%;
+  width: 100% !important;
+  height: 100% !important;
+  position: relative !important;
+  pointer-events: auto;
 }
 
 .loading-overlay,
