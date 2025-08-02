@@ -33,12 +33,23 @@ export default defineNuxtConfig({
         'three',
         'three/examples/jsm/loaders/GLTFLoader.js',
         'three/examples/jsm/loaders/DRACOLoader.js',
+        'three/examples/jsm/loaders/KTX2Loader.js',  // Add KTX2Loader
         'three/examples/jsm/libs/meshopt_decoder.module.js',
         'three-stdlib'
       ],
+      exclude: [
+        // Exclude worker-related modules that can cause issues in SSR
+        'three/examples/jsm/libs/draco/draco_wasm_wrapper.js'
+      ]
     },
     define: {
       global: 'globalThis',
+    },
+    server: {
+      // Prevent pre-bundling of worker files
+      fs: {
+        allow: ['..']
+      }
     }
   },
 

@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
-import { KTXLoader } from 'three-stdlib'
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 
 export interface UseGltfConverterOptions {
   dracoDecoderPath?: string
@@ -24,7 +24,7 @@ export interface GltfConversionResult {
 export function useGltfConverter(
   path?: string,
   options: UseGltfConverterOptions = {}
-) {
+): any {
   const {
     dracoDecoderPath = 'https://www.gstatic.com/draco/v1/decoders/',
     autoLoad = true,
@@ -48,9 +48,14 @@ export function useGltfConverter(
   const loader = new GLTFLoader()
   const dracoLoader = new DRACOLoader()
   dracoLoader.setDecoderPath(dracoDecoderPath)
+  
+  // Fix: Create KTX2Loader instance and set transcoder path
+  const ktx2Loader = new KTX2Loader()
+  ktx2Loader.setTranscoderPath('https://www.gstatic.com/basis/')
+  
   loader.setDRACOLoader(dracoLoader)
   loader.setMeshoptDecoder(MeshoptDecoder)
-  loader.setKTX2Loader(new KTXLoader())
+  loader.setKTX2Loader(ktx2Loader) // Fix: Use KTX2Loader instead of KTXLoader
 
   // Computed
   const isReady = computed(() => !isLoading.value && !error.value && scene.value !== null)
@@ -78,8 +83,8 @@ export function useGltfConverter(
             onProgress?.(progressEvent)
           },
           (err) => {
-            const error = new Error(`Failed to load GLTF model: ${err.message || err}`)
-            reject(error)
+            error.value = err instanceof Error ? err : new Error('Failed to load GLTF')
+            reject(err)
           }
         )
       })
@@ -89,21 +94,18 @@ export function useGltfConverter(
       animations.value = result.animations || []
       cameras.value = result.cameras || []
 
-      // Setup animations if present
-      if (animations.value.length > 0) {
+      // Setup animation mixer if animations exist
+      if (animations.value.length > 0 && scene.value) {
         mixer.value = new THREE.AnimationMixer(scene.value)
-        const actionsMap: Record<string, THREE.AnimationAction> = {}
         
-        animations.value.forEach((clip) => {
+        // Create actions for all animations
+        const newActions: Record<string, THREE.AnimationAction> = {}
+        animations.value.forEach((clip, index) => {
           const action = mixer.value!.clipAction(clip)
-          actionsMap[clip.name] = action
+          newActions[clip.name || `animation_${index}`] = action
         })
-        
-        actions.value = actionsMap
+        actions.value = newActions
       }
-
-      // Setup shadows and materials
-      setupSceneDefaults(scene.value)
 
       onLoad?.(result)
 
@@ -114,225 +116,93 @@ export function useGltfConverter(
         mixer: mixer.value,
         actions: actions.value
       }
-
     } catch (err) {
-      const errorObj = err instanceof Error ? err : new Error(String(err))
-      error.value = errorObj
-      onError?.(errorObj)
-      throw errorObj
+      const errorInstance = err instanceof Error ? err : new Error('Unknown error')
+      error.value = errorInstance
+      onError?.(errorInstance)
+      throw errorInstance
     } finally {
       isLoading.value = false
     }
   }
 
-  function setupSceneDefaults(sceneObj: THREE.Scene) {
-    sceneObj.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true
-        child.receiveShadow = true
-        
-        // Enhance materials
-        if (child.material) {
-          if (Array.isArray(child.material)) {
-            child.material.forEach(enhanceMaterial)
-          } else {
-            enhanceMaterial(child.material)
-          }
-        }
-      }
-    })
-  }
-
-  function enhanceMaterial(material: THREE.Material) {
-    if ('envMapIntensity' in material) {
-      material.envMapIntensity = 0.8
+  function playAnimation(name: string, options: { loop?: boolean; fadeIn?: number } = {}) {
+    const action = actions.value[name]
+    if (!action) {
+      console.warn(`Animation "${name}" not found`)
+      return
     }
-    if ('roughness' in material && material.roughness === undefined) {
-      material.roughness = 0.5
-    }
-    if ('metalness' in material && material.metalness === undefined) {
-      material.metalness = 0.1
-    }
-  }
 
-  function playAnimation(name?: string) {
-    if (!mixer.value) return
-
-    if (name && actions.value[name]) {
-      // Play specific animation
-      Object.values(actions.value).forEach(action => action.stop())
-      actions.value[name].play()
-    } else {
-      // Play all animations
-      Object.values(actions.value).forEach(action => action.play())
-    }
-  }
-
-  function stopAnimation(name?: string) {
-    if (!mixer.value) return
-
-    if (name && actions.value[name]) {
-      actions.value[name].stop()
-    } else {
-      Object.values(actions.value).forEach(action => action.stop())
-    }
-  }
-
-  function pauseAnimation(name?: string) {
-    if (!mixer.value) return
-
-    if (name && actions.value[name]) {
-      actions.value[name].paused = true
-    } else {
-      Object.values(actions.value).forEach(action => {
-        action.paused = true
-      })
-    }
-  }
-
-  function resumeAnimation(name?: string) {
-    if (!mixer.value) return
-
-    if (name && actions.value[name]) {
-      actions.value[name].paused = false
-    } else {
-      Object.values(actions.value).forEach(action => {
-        action.paused = false
-      })
-    }
-  }
-
-  function updateAnimations(delta: number) {
-    if (mixer.value) {
-      mixer.value.update(delta)
-    }
-  }
-
-  function dispose() {
-    if (mixer.value) {
-      mixer.value.stopAllAction()
-      mixer.value.uncacheRoot(mixer.value.getRoot())
+    action.reset()
+    if (options.loop) {
+      action.setLoop(THREE.LoopRepeat, Infinity)
     }
     
-    if (scene.value) {
-      scene.value.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry?.dispose()
-          if (Array.isArray(child.material)) {
-            child.material.forEach(material => material.dispose())
-          } else if (child.material) {
-            child.material.dispose()
-          }
-        }
-      })
+    if (options.fadeIn) {
+      action.fadeIn(options.fadeIn)
+    }
+    
+    action.play()
+  }
+
+  function stopAnimation(name: string, fadeOut?: number) {
+    const action = actions.value[name]
+    if (!action) {
+      console.warn(`Animation "${name}" not found`)
+      return
     }
 
-    // Reset state
-    gltf.value = null
-    scene.value = null
-    animations.value = []
-    cameras.value = []
-    mixer.value = null
-    actions.value = {}
-    error.value = null
-    progress.value = 0
+    if (fadeOut) {
+      action.fadeOut(fadeOut)
+    } else {
+      action.stop()
+    }
+  }
+
+  function stopAllAnimations() {
+    Object.values(actions.value).forEach(action => action.stop())
+  }
+
+  function updateMixer(deltaTime: number) {
+    if (mixer.value) {
+      mixer.value.update(deltaTime)
+    }
   }
 
   // Auto-load if path is provided
   if (path && autoLoad) {
-    load(path).catch(() => {
-      // Error is already handled in the load function
-    })
+    load(path)
   }
 
-  // Cleanup on unmount
-  if (typeof window !== 'undefined') {
-    window.addEventListener('beforeunload', dispose)
-  }
+  // Watch for path changes
+  watch(() => path, (newPath) => {
+    if (newPath && autoLoad) {
+      load(newPath)
+    }
+  })
 
   return {
     // State
-    isLoading: readonly(isLoading),
-    error: readonly(error),
-    progress: readonly(progress),
-    gltf: readonly(gltf),
-    scene: readonly(scene),
-    animations: readonly(animations),
-    cameras: readonly(cameras),
-    mixer: readonly(mixer),
-    actions: readonly(actions),
-
+    isLoading,
+    error,
+    progress,
+    gltf,
+    scene,
+    animations,
+    cameras,
+    mixer,
+    actions,
+    
     // Computed
     isReady,
     hasAnimations,
     progressPercent,
-
+    
     // Methods
     load,
     playAnimation,
     stopAnimation,
-    pauseAnimation,
-    resumeAnimation,
-    updateAnimations,
-    dispose
+    stopAllAnimations,
+    updateMixer
   }
-}
-
-// Helper composable for animation loop integration
-export function useGltfAnimationLoop(
-  converterInstance: ReturnType<typeof useGltfConverter>
-) {
-  const clock = new THREE.Clock()
-  let animationId: number | null = null
-
-  function startAnimationLoop() {
-    if (animationId !== null) return
-
-    function animate() {
-      const delta = clock.getDelta()
-      converterInstance.updateAnimations(delta)
-      animationId = requestAnimationFrame(animate)
-    }
-
-    animate()
-  }
-
-  function stopAnimationLoop() {
-    if (animationId !== null) {
-      cancelAnimationFrame(animationId)
-      animationId = null
-    }
-  }
-
-  // Auto-start when animations are available
-  watch(() => converterInstance.hasAnimations.value, (hasAnims) => {
-    if (hasAnims) {
-      startAnimationLoop()
-    } else {
-      stopAnimationLoop()
-    }
-  })
-
-  return {
-    startAnimationLoop,
-    stopAnimationLoop
-  }
-}
-
-// Utility function to preload multiple GLTF models
-export async function preloadGltfModels(
-  models: Array<{ name: string; path: string }>,
-  options: UseGltfConverterOptions = {}
-): Promise<Record<string, GltfConversionResult>> {
-  const results: Record<string, GltfConversionResult> = {}
-  
-  const loadPromises = models.map(async (model) => {
-    const converter = useGltfConverter(undefined, { autoLoad: false, ...options })
-    const result = await converter.load(model.path)
-    results[model.name] = result
-    return result
-  })
-
-  await Promise.all(loadPromises)
-  return results
 }
