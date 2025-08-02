@@ -1,0 +1,66 @@
+{
+  "name": "vue-gltf-converter",
+  "version": "1.0.0",
+  "description": "Convert GLTF models to Vue 3 / Nuxt TresJS components",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview",
+    "dev:nuxt": "nuxt dev",
+    "build:nuxt": "nuxt build",
+    "generate:nuxt": "nuxt generate",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
+    "type-check": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@tresjs/cientos": "^4.3.1",
+    "@tresjs/core": "^4.3.6",
+    "@tresjs/nuxt": "^2.1.2",
+    "base64-arraybuffer": "^0.2.0",
+    "file-saver": "^2.0.5",
+    "jszip": "^3.10.1",
+    "nuxt": "^3.18.0",
+    "pinia": "^2.3.1",
+    "three": "^0.163.0",
+    "three-stdlib": "^2.36.0",
+    "vue": "^3.5.18"
+  },
+  "devDependencies": {
+    "@nuxt/devtools": "^1.7.0",
+    "@rollup/rollup-win32-x64-msvc": "^4.46.2",
+    "@types/file-saver": "^2.0.7",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vue/tsconfig": "^0.5.1",
+    "eslint": "^8.57.1",
+    "eslint-plugin-vue": "^9.33.0",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.19",
+    "vue-tsc": "^1.8.27"
+  },
+  "keywords": [
+    "vue",
+    "vue3",
+    "nuxt",
+    "three.js",
+    "tresjs",
+    "gltf",
+    "glb",
+    "3d",
+    "converter",
+    "component-generator"
+  ],
+  "author": "JTAnttila",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JTAnttila/vue-gltf-converter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JTAnttila/vue-gltf-converter/issues"
+  },
+  "homepage": "https://github.com/JTAnttila/vue-gltf-converter#readme"
+}
