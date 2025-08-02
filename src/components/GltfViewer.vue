@@ -1,264 +1,281 @@
 <template>
   <div class="viewer-container">
-    <div v-if="error" class="error-message">
-      {{ error }}
+    <div v-if="loading" class="loading-overlay">
+      <div class="spinner"></div>
+      <p>Loading 3D model...</p>
     </div>
     
-    <div v-else-if="!scene" class="loading-message">
-      Loading 3D model...
+    <div v-if="error" class="error-overlay">
+      <p>{{ error }}</p>
     </div>
     
     <TresCanvas 
-      v-else
+      v-if="gltfScene"
       v-bind="canvasConfig" 
-      window-size
       class="tres-canvas"
     >
       <!-- Camera -->
       <TresPerspectiveCamera 
-        :position="[0, 0, 150]" 
-        :fov="50" 
+        :position="cameraPosition" 
+        :fov="45" 
       />
       
-      <!-- Lighting -->
-      <TresAmbientLight :intensity="ambientIntensity" />
+      <!-- Lighting Setup -->
+      <TresAmbientLight :intensity="0.2" />
       <TresDirectionalLight 
-        v-if="!useEnvironmentLighting"
         :position="[10, 10, 5]" 
-        :intensity="directionalIntensity"
-        :cast-shadow="shadows"
+        :intensity="props.intensity * 0.8"
+        :cast-shadow="props.shadows"
       />
       
       <!-- Environment -->
       <Suspense>
         <Environment 
-          v-if="useEnvironmentLighting"
-          :preset="preset"
-          :background="true"
+          v-if="props.environment !== 'none'"
+          :preset="props.environment"
+          :background="false"
         />
       </Suspense>
       
-      <!-- Stage/Scene -->
-      <Suspense>
-        <TresGroup>
-          <!-- Contact Shadow -->
-          <ContactShadows 
-            v-if="contactShadow"
-            :opacity="0.4"
-            :scale="20"
-            :blur="1"
-            :far="10"
-            :resolution="256"
-          />
-          
-          <!-- Main 3D Model -->
-          <primitive 
-            :object="scene"
-            :cast-shadow="shadows"
-            :receive-shadow="shadows"
-          />
-        </TresGroup>
-      </Suspense>
+      <!-- Scene Content -->
+      <TresGroup>
+        <!-- Contact Shadows -->
+        <ContactShadows 
+          v-if="props.contactShadow"
+          :opacity="0.3"
+          :scale="10"
+          :blur="2"
+          :far="5"
+          :resolution="256"
+          :position="[0, -1, 0]"
+        />
+        
+        <!-- GLTF Model -->
+        <primitive 
+          :object="gltfScene"
+          @click="onModelClick"
+        />
+      </TresGroup>
       
       <!-- Controls -->
       <OrbitControls 
-        :auto-rotate="autoRotate"
+        :auto-rotate="props.autoRotate"
+        :auto-rotate-speed="2"
         :enable-damping="true"
         :damping-factor="0.05"
-        :max-polar-angle="Math.PI / 2"
+        :max-polar-angle="Math.PI"
+        :min-distance="1"
+        :max-distance="1000"
       />
     </TresCanvas>
-    
-    <!-- Controls Panel -->
-    <div v-if="showControls" class="controls-panel">
-      <div class="control-group">
-        <label>
-          <input 
-            v-model="shadows" 
-            type="checkbox"
-          />
-          Shadows
-        </label>
-        
-        <label>
-          <input 
-            v-model="contactShadow" 
-            type="checkbox"
-          />
-          Contact Shadow
-        </label>
-        
-        <label>
-          <input 
-            v-model="autoRotate" 
-            type="checkbox"
-          />
-          Auto Rotate
-        </label>
-        
-        <label>
-          <input 
-            v-model="useEnvironmentLighting" 
-            type="checkbox"
-          />
-          Environment Lighting
-        </label>
-      </div>
-      
-      <div class="control-group">
-        <label>
-          Environment:
-          <select v-model="environment">
-            <option value="sunset">Sunset</option>
-            <option value="dawn">Dawn</option>
-            <option value="night">Night</option>
-            <option value="warehouse">Warehouse</option>
-            <option value="forest">Forest</option>
-            <option value="apartment">Apartment</option>
-            <option value="studio">Studio</option>
-            <option value="city">City</option>
-            <option value="park">Park</option>
-            <option value="lobby">Lobby</option>
-          </select>
-        </label>
-        
-        <label>
-          Preset:
-          <select v-model="preset">
-            <option value="rembrandt">Rembrandt</option>
-            <option value="portrait">Portrait</option>
-            <option value="upfront">Upfront</option>
-            <option value="soft">Soft</option>
-          </select>
-        </label>
-      </div>
-      
-      <div class="control-group">
-        <label>
-          Intensity:
-          <input 
-            v-model.number="intensity" 
-            type="range" 
-            min="0" 
-            max="2" 
-            step="0.1"
-          />
-          <span>{{ intensity }}</span>
-        </label>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
-import { TresCanvas, useRenderLoop } from '@tresjs/core'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { TresCanvas } from '@tresjs/core'
 import { OrbitControls, Environment, ContactShadows } from '@tresjs/cientos'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import * as THREE from 'three'
 
 interface Props {
-  scene?: THREE.Scene | null
+  buffers?: Map<string, ArrayBuffer> | null
+  fileName?: string
   shadows?: boolean
   contactShadow?: boolean
   autoRotate?: boolean
   environment?: string
   preset?: string
   intensity?: number
-  showControls?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  scene: null,
+  buffers: null,
+  fileName: '',
   shadows: true,
   contactShadow: true,
   autoRotate: false,
   environment: 'city',
   preset: 'rembrandt',
-  intensity: 1,
-  showControls: false
+  intensity: 1
 })
 
-// Reactive state
-const shadows = ref(props.shadows)
-const contactShadow = ref(props.contactShadow)
-const autoRotate = ref(props.autoRotate)
-const environment = ref(props.environment)
-const preset = ref(props.preset)
-const intensity = ref(props.intensity)
-const useEnvironmentLighting = ref(true)
+// State
+const loading = ref(false)
 const error = ref<string | null>(null)
+const gltfScene = ref<THREE.Group | null>(null)
+const gltfData = ref<any>(null)
+const boundingBox = ref<THREE.Box3 | null>(null)
 
-// Computed properties
+// Computed
 const canvasConfig = computed(() => ({
-  clearColor: '#1a1a1a',
-  shadows: shadows.value,
-  alpha: false,
-  powerPreference: 'high-performance' as const,
+  clearColor: '#f0f0f0',
+  shadows: props.shadows,
+  alpha: true,
   antialias: true,
-  preserveDrawingBuffer: true
+  preserveDrawingBuffer: true,
+  powerPreference: 'high-performance' as const
 }))
 
-const ambientIntensity = computed(() => 
-  useEnvironmentLighting.value ? 0.25 : 0.5
-)
-
-const directionalIntensity = computed(() => 
-  intensity.value * (useEnvironmentLighting.value ? 0.5 : 1)
-)
-
-// Watch for scene changes and setup shadows
-watch(() => props.scene, (newScene) => {
-  if (newScene) {
-    setupSceneShadows(newScene)
-  }
-}, { immediate: true })
-
-watch(shadows, (newShadows) => {
-  if (props.scene) {
-    setupSceneShadows(props.scene)
-  }
+const cameraPosition = computed((): [number, number, number] => {
+  if (!boundingBox.value) return [5, 5, 5]
+  
+  const box = boundingBox.value
+  const size = box.getSize(new THREE.Vector3())
+  const maxDim = Math.max(size.x, size.y, size.z)
+  const distance = maxDim * 2
+  
+  return [distance, distance * 0.5, distance]
 })
 
 // Methods
-function setupSceneShadows(scene: THREE.Scene) {
-  if (!scene) return
-  
+async function loadGLTF() {
+  if (!props.buffers || !props.fileName) {
+    gltfScene.value = null
+    return
+  }
+
   try {
-    scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        obj.castShadow = shadows.value
-        obj.receiveShadow = shadows.value
-        
-        // Set environment map intensity for materials
-        if (obj.material) {
-          if (Array.isArray(obj.material)) {
-            obj.material.forEach(mat => {
-              if ('envMapIntensity' in mat) {
-                mat.envMapIntensity = 0.8
-              }
-            })
-          } else if ('envMapIntensity' in obj.material) {
-            obj.material.envMapIntensity = 0.8
-          }
-        }
+    loading.value = true
+    error.value = null
+
+    // Setup loaders
+    const manager = new THREE.LoadingManager()
+    const loader = new GLTFLoader(manager)
+    
+    // Setup DRACO loader
+    const dracoLoader = new DRACOLoader()
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/')
+    loader.setDRACOLoader(dracoLoader)
+    
+    // Setup KTX2 loader
+    const ktx2Loader = new KTX2Loader()
+    ktx2Loader.setTranscoderPath('https://www.gstatic.com/basis/')
+    loader.setKTX2Loader(ktx2Loader)
+    
+    // Setup Meshopt decoder
+    loader.setMeshoptDecoder(MeshoptDecoder)
+
+    // Setup URL modifier for loading dependencies
+    const objectURLs: string[] = []
+    manager.setURLModifier((url: string) => {
+      const buffer = props.buffers!.get(url)
+      if (buffer) {
+        const objectURL = URL.createObjectURL(new Blob([buffer]))
+        objectURLs.push(objectURL)
+        return objectURL
       }
+      return url
     })
+
+    // Get main GLTF buffer
+    const gltfBuffer = props.buffers.get(props.fileName)
+    if (!gltfBuffer) {
+      throw new Error(`GLTF file ${props.fileName} not found in buffers`)
+    }
+
+    // Parse GLTF
+    const gltf = await new Promise<any>((resolve, reject) => {
+      loader.parse(
+        gltfBuffer,
+        props.fileName.includes('/') ? props.fileName.substring(0, props.fileName.lastIndexOf('/') + 1) : '',
+        resolve,
+        reject
+      )
+    })
+
+    // Clean up object URLs
+    objectURLs.forEach(url => URL.revokeObjectURL(url))
+
+    // Process the loaded scene
+    gltfData.value = gltf
+    gltfScene.value = gltf.scene
+
+    // Setup shadows and materials
+    setupScene(gltf.scene)
+    
+    // Calculate bounding box for camera positioning
+    calculateBoundingBox(gltf.scene)
+
+    console.log('GLTF loaded successfully:', gltf)
+
   } catch (err) {
-    console.error('Error setting up scene shadows:', err)
-    error.value = 'Failed to setup scene shadows'
+    console.error('Error loading GLTF:', err)
+    error.value = `Failed to load GLTF: ${err instanceof Error ? err.message : 'Unknown error'}`
+    gltfScene.value = null
+  } finally {
+    loading.value = false
   }
 }
 
-// Animation loop for any custom updates
-const { onBeforeRender } = useRenderLoop()
+function setupScene(scene: THREE.Object3D) {
+  scene.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      // Enable shadows
+      child.castShadow = props.shadows
+      child.receiveShadow = props.shadows
+      
+      // Enhance materials
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach(mat => enhanceMaterial(mat))
+        } else {
+          enhanceMaterial(child.material)
+        }
+      }
+    }
+  })
+}
 
-onBeforeRender(() => {
-  // Any custom render logic can go here
+function enhanceMaterial(material: THREE.Material) {
+  if (material instanceof THREE.MeshStandardMaterial || 
+      material instanceof THREE.MeshPhysicalMaterial) {
+    material.envMapIntensity = 1
+    material.needsUpdate = true
+  }
+}
+
+function calculateBoundingBox(scene: THREE.Object3D) {
+  const box = new THREE.Box3().setFromObject(scene)
+  boundingBox.value = box
+  
+  // Center the scene
+  const center = box.getCenter(new THREE.Vector3())
+  scene.position.sub(center)
+}
+
+function onModelClick(event: any) {
+  console.log('Model clicked:', event)
+}
+
+// Watch for prop changes
+watch(() => [props.buffers, props.fileName], () => {
+  loadGLTF()
+}, { immediate: true })
+
+watch(() => props.shadows, (newShadows) => {
+  if (gltfScene.value) {
+    setupScene(gltfScene.value)
+  }
 })
 
-onMounted(() => {
-  if (props.scene) {
-    setupSceneShadows(props.scene)
+// Cleanup
+onUnmounted(() => {
+  if (gltfScene.value) {
+    // Cleanup Three.js resources
+    gltfScene.value.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry?.dispose()
+        if (Array.isArray(child.material)) {
+          child.material.forEach(mat => mat.dispose())
+        } else {
+          child.material?.dispose()
+        }
+      }
+    })
   }
 })
 </script>
@@ -268,8 +285,10 @@ onMounted(() => {
   position: relative;
   width: 100%;
   height: 100%;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
   overflow: hidden;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
 .tres-canvas {
@@ -277,74 +296,50 @@ onMounted(() => {
   height: 100%;
 }
 
-.loading-message,
-.error-message {
+.loading-overlay,
+.error-overlay {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: white;
-  font-size: 1.2rem;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.9);
   z-index: 100;
-  background: rgba(0, 0, 0, 0.7);
-  padding: 1rem 2rem;
-  border-radius: 8px;
 }
 
-.error-message {
-  color: #ff6b6b;
-  border: 2px solid #ff6b6b;
-}
-
-.controls-panel {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  background: rgba(255, 255, 255, 0.95);
-  padding: 1rem;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  min-width: 200px;
-  z-index: 100;
-  backdrop-filter: blur(10px);
-}
-
-.control-group {
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #3498db;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
   margin-bottom: 1rem;
 }
 
-.control-group:last-child {
-  margin-bottom: 0;
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
-.control-group label {
-  display: block;
-  margin-bottom: 0.5rem;
-  font-size: 0.9rem;
+.loading-overlay p,
+.error-overlay p {
+  margin: 0;
+  font-size: 1.1rem;
   color: #333;
-  cursor: pointer;
 }
 
-.control-group input[type="checkbox"] {
-  margin-right: 0.5rem;
+.error-overlay {
+  background: rgba(255, 245, 245, 0.95);
 }
 
-.control-group input[type="range"] {
-  width: 100%;
-  margin: 0.25rem 0;
-}
-
-.control-group select {
-  width: 100%;
-  padding: 0.25rem;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background: white;
-}
-
-.control-group span {
-  font-weight: bold;
-  color: #666;
-  margin-left: 0.5rem;
+.error-overlay p {
+  color: #d32f2f;
+  text-align: center;
+  padding: 0 2rem;
 }
 </style>

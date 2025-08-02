@@ -1,6 +1,6 @@
 // src/stores/useGltfStore.ts
 import { defineStore } from 'pinia'
-import { ref, type Ref } from 'vue'
+import { ref, computed, type Ref, type ComputedRef } from 'vue'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
@@ -9,7 +9,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
-import { parseToVue } from '../utils/vueGltfParser'
+import { parseToVue } from '../utils/parser'
 import { createVueZip } from '../utils/createVueZip'
 
 export interface GltfConfig {
@@ -27,30 +27,25 @@ export interface GltfConfig {
   printwidth?: number
 }
 
-// Define the store return type interface
-interface GltfStoreReturn {
-  // State
+export interface GltfStoreReturn {
   isLoading: Ref<boolean>
   error: Ref<string | null>
   fileName: Ref<string>
   code: Ref<string>
   buffers: Ref<Map<string, ArrayBuffer> | null>
-  animations: Ref<THREE.AnimationClip[]>
-  cameras: Ref<THREE.Camera[]>
-  scene: Ref<THREE.Group | null>
-  
-  // Getters
-  hasCode: Ref<boolean>
-  hasAnimations: Ref<boolean>
-  hasScene: () => boolean
-  
-  // Actions
+  animations: Ref<any[]>
+  cameras: Ref<any[]>
+  scene: Ref<any>
+  hasCode: ComputedRef<boolean>
+  hasAnimations: ComputedRef<boolean>
+  hasScene: ComputedRef<boolean>
+  hasFile: ComputedRef<boolean>
   clearError: () => void
-  setFileName: (newFileName: string) => void
-  setBuffers: (newBuffers: Map<string, ArrayBuffer>, newFileName?: string) => void
+  setFileName: (name: string) => void
+  setBuffers: (newBuffers: Map<string, ArrayBuffer>, newFileName: string) => void
+  generateVueScene: (config: GltfConfig) => Promise<void>
   reset: () => void
   downloadVueProject: (config: GltfConfig) => Promise<void>
-  generateVueScene: (config: GltfConfig) => Promise<void>
 }
 
 export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
@@ -65,8 +60,10 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
   const scene = ref<THREE.Group | null>(null)
 
   // Getters
-  const hasCode = ref(false)
-  const hasAnimations = ref(false)
+  const hasCode = computed(() => code.value.length > 0)
+  const hasAnimations = computed(() => animations.value.length > 0)
+  const hasScene = computed(() => scene.value !== null)
+  const hasFile = computed(() => fileName.value.length > 0)
 
   // Actions
   function clearError() {
@@ -94,14 +91,8 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
     animations.value = []
     cameras.value = []
     scene.value = null
-    hasCode.value = false
-    hasAnimations.value = false
     error.value = null
     isLoading.value = false
-  }
-
-  function hasScene() {
-    return scene.value !== null
   }
 
   async function downloadVueProject(config: GltfConfig) {
@@ -117,16 +108,15 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
         throw new Error('No Vue component generated')
       }
 
-      const vueZipConfig = {
-        ...config,
-        buffers: buffers.value,
+      const zip = await createVueZip({
         code: code.value,
-        fileName: fileName.value
-      }
+        buffers: buffers.value,
+        fileName: fileName.value,
+        ...config
+      })
 
-      const blob = await createVueZip(vueZipConfig)
       const projectName = fileName.value.split('.')[0]
-      saveAs(blob, `${projectName}-vue.zip`)
+      saveAs(zip, `${projectName}-vue.zip`)
     } catch (err) {
       error.value = `Failed to create zip: ${err instanceof Error ? err.message : 'Unknown error'}`
       throw err
@@ -145,7 +135,7 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
       }
 
       const rawFileName = fileName.value
-      const finalFileName: string = config.pathPrefix && config.pathPrefix !== '' 
+      const resolvedFileName = config.pathPrefix && config.pathPrefix !== '' 
         ? `${config.pathPrefix}/${rawFileName}` 
         : rawFileName
 
@@ -178,9 +168,9 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
             return url
           })
 
-          const gltfBuffer = buffers.value!.get(finalFileName)
+          const gltfBuffer = buffers.value!.get(fileName.value)
           if (!gltfBuffer) {
-            reject(new Error(`Buffer not found for ${finalFileName}`))
+            reject(new Error(`Buffer not found for ${fileName.value}`))
             return
           }
 
@@ -197,7 +187,7 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
 
           gltfLoader.parse(
             gltfBuffer,
-            finalFileName.slice(0, finalFileName.lastIndexOf('/') + 1),
+            fileName.value.slice(0, fileName.value.lastIndexOf('/') + 1),
             onLoad,
             onError
           )
@@ -229,7 +219,7 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
       // Parse GLTF to Vue component code
       const vueCode = await parseToVue(gltfResult, {
         ...config,
-        fileName: finalFileName,
+        fileName: resolvedFileName,
         printwidth: config.printwidth || 100
       })
 
@@ -237,8 +227,6 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
       animations.value = gltfResult.animations || []
       cameras.value = gltfResult.cameras || []
       scene.value = gltfResult.scene
-      hasCode.value = true
-      hasAnimations.value = (gltfResult.animations?.length || 0) > 0
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'
@@ -265,6 +253,7 @@ export const useGltfStore = defineStore('gltf', (): GltfStoreReturn => {
     hasCode,
     hasAnimations,
     hasScene,
+    hasFile,
     
     // Actions
     clearError,

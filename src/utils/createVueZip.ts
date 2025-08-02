@@ -390,7 +390,7 @@ function generateTSConfig(): object {
 function generateNuxtReadme(fileName: string): string {
   return `# Nuxt 3 + TresJS GLTF Viewer
 
-This project was generated from GLTF file: \\\`${fileName}\\\`
+This project was generated from GLTF file: \`${fileName}\`
 
 ## Setup
 

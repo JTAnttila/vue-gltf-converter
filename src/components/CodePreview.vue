@@ -267,7 +267,9 @@ watch(() => props.code, () => {
 
 .code-container {
   position: relative;
-  max-height: 600px;
+  height: 100%;
+  min-height: 400px;
+  max-height: calc(100vh - 200px);
   overflow: auto;
   background: #282c34;
 }
