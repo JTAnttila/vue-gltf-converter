@@ -12,7 +12,6 @@
     <TresCanvas 
       v-bind="canvasConfig" 
       class="tres-canvas"
-      window-size
       @created="onCanvasCreated"
       @contextmenu.prevent
     >
@@ -27,24 +26,42 @@
       <TresDirectionalLight 
         :position="[10, 10, 5]" 
         :intensity="props.intensity * 0.8"
-        :cast-shadow="false"
+        :cast-shadow="props.shadows"
       />
       
-      <!-- Scene Content -->
-      <TresGroup>
-        <!-- Debug: Default scene for testing -->
-        <TresMesh v-if="!gltfScene" :position="[0, 0, 0]">
-          <TresBoxGeometry :args="[1, 1, 1]" />
-          <TresMeshStandardMaterial color="hotpink" />
-        </TresMesh>
-        
-        <!-- GLTF Model -->
-        <primitive 
-          v-if="gltfScene"
-          :object="gltfScene"
-          @click="onModelClick"
-        />
-      </TresGroup>
+      <!-- Environment -->
+      <Environment 
+        v-if="props.environment !== 'none'"
+        :preset="props.environment"
+      />
+      
+      <!-- Contact Shadows -->
+      <ContactShadows 
+        v-if="props.contactShadow"
+        :opacity="0.4"
+        :scale="10"
+        :blur="1"
+        :far="10"
+        :resolution="256"
+      />
+      
+      <!-- Scene Content with Suspense -->
+      <Suspense>
+        <template #default>
+          <GltfModel 
+            v-if="modelUrl"
+            :path="modelUrl"
+            @click="onModelClick"
+          />
+        </template>
+        <template #fallback>
+          <!-- Fallback content while loading -->
+          <TresMesh :position="[0, 0, 0]">
+            <TresBoxGeometry :args="[1, 1, 1]" />
+            <TresMeshStandardMaterial color="hotpink" />
+          </TresMesh>
+        </template>
+      </Suspense>
       
       <!-- Controls -->
       <OrbitControls 
@@ -63,13 +80,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted, defineComponent, h } from 'vue'
 import { TresCanvas } from '@tresjs/core'
-import { OrbitControls, Environment, ContactShadows } from '@tresjs/cientos'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
-import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
-import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
+import { OrbitControls, Environment, ContactShadows, useGLTF } from '@tresjs/cientos'
 import * as THREE from 'three'
 
 interface Props {
@@ -97,39 +110,66 @@ const props = withDefaults(defineProps<Props>(), {
 // State
 const loading = ref(false)
 const error = ref<string | null>(null)
-const gltfScene = ref<THREE.Group | null>(null)
-const gltfData = ref<any>(null)
-const boundingBox = ref<THREE.Box3 | null>(null)
+const modelUrl = ref<string | null>(null)
 
 // Computed
 const canvasConfig = computed(() => ({
   clearColor: '#f0f0f0',
-  shadows: false, // Disable shadows to prevent proxy errors
+  shadows: props.shadows,
   alpha: true,
   antialias: true,
   preserveDrawingBuffer: false,
-  powerPreference: 'high-performance' as const
+  powerPreference: 'high-performance' as const,
+  windowSize: true
 }))
 
 const cameraPosition = computed((): [number, number, number] => {
-  if (!boundingBox.value || !gltfScene.value) {
-    return [3, 3, 3] // Default position when no model
+  return [3, 3, 3]
+})
+
+// Custom GLTF Model component
+const GltfModel = defineComponent({
+  props: {
+    path: {
+      type: String,
+      required: true
+    }
+  },
+  async setup(props) {
+    try {
+      const { scene } = await useGLTF(props.path)
+      
+      if (scene) {
+        // Auto-scale and center the model
+        const box = new THREE.Box3().setFromObject(scene)
+        const size = box.getSize(new THREE.Vector3())
+        const center = box.getCenter(new THREE.Vector3())
+        
+        // Center the model
+        scene.position.sub(center)
+        
+        // Scale the model to fit in view
+        const maxDim = Math.max(size.x, size.y, size.z)
+        if (maxDim > 0) {
+          const scale = Math.min(3 / maxDim, 5) // Max scale of 5
+          scene.scale.setScalar(scale)
+        }
+        
+        console.log('GLTF model loaded and scaled:', { size, scale: scene.scale.x })
+      }
+      
+      return () => h('primitive', { object: scene })
+    } catch (error) {
+      console.error('Error loading GLTF model:', error)
+      throw error
+    }
   }
-  
-  const box = boundingBox.value
-  const size = box.getSize(new THREE.Vector3())
-  const maxDim = Math.max(size.x, size.y, size.z)
-  
-  // Ensure minimum distance even for very small models
-  const distance = Math.max(maxDim * 2.5, 5)
-  
-  return [distance, distance * 0.7, distance]
 })
 
 // Methods
-async function loadGLTF() {
+async function createModelUrl() {
   if (!props.buffers || !props.fileName) {
-    gltfScene.value = null
+    modelUrl.value = null
     return
   }
 
@@ -137,139 +177,30 @@ async function loadGLTF() {
     loading.value = true
     error.value = null
 
-    // Setup loaders
-    const manager = new THREE.LoadingManager()
-    const loader = new GLTFLoader(manager)
-    
-    // Setup DRACO loader
-    const dracoLoader = new DRACOLoader()
-    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/')
-    loader.setDRACOLoader(dracoLoader)
-    
-    // Setup KTX2 loader
-    const ktx2Loader = new KTX2Loader()
-    ktx2Loader.setTranscoderPath('https://www.gstatic.com/basis/')
-    loader.setKTX2Loader(ktx2Loader)
-    
-    // Setup Meshopt decoder
-    loader.setMeshoptDecoder(MeshoptDecoder)
+    console.log('Creating model URL for:', props.fileName)
+    console.log('Available buffers:', Array.from(props.buffers.keys()))
 
-    // Setup URL modifier for loading dependencies
-    const objectURLs: string[] = []
-    manager.setURLModifier((url: string) => {
-      const buffer = props.buffers!.get(url)
-      if (buffer) {
-        const objectURL = URL.createObjectURL(new Blob([buffer]))
-        objectURLs.push(objectURL)
-        return objectURL
-      }
-      return url
-    })
-
-    // Get main GLTF buffer
+    // Get the main GLTF buffer
     const gltfBuffer = props.buffers.get(props.fileName)
     if (!gltfBuffer) {
       throw new Error(`GLTF file ${props.fileName} not found in buffers`)
     }
 
-    // Parse GLTF
-    const gltf = await new Promise<any>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(new Error('GLTF loading timeout after 30 seconds'))
-      }, 30000)
-
-      loader.parse(
-        gltfBuffer,
-        props.fileName.includes('/') ? props.fileName.substring(0, props.fileName.lastIndexOf('/') + 1) : '',
-        (result) => {
-          clearTimeout(timeoutId)
-          resolve(result)
-        },
-        (error) => {
-          clearTimeout(timeoutId)
-          reject(error)
-        }
-      )
+    // Create blob URL for the main GLTF file
+    const blob = new Blob([gltfBuffer], { 
+      type: props.fileName.endsWith('.glb') ? 'model/gltf-binary' : 'model/gltf+json' 
     })
+    const url = URL.createObjectURL(blob)
+    modelUrl.value = url
 
-    // Clean up object URLs
-    objectURLs.forEach(url => URL.revokeObjectURL(url))
-
-    // Process the loaded scene
-    gltfData.value = gltf
-    
-    // Clone the scene to avoid proxy issues
-    const clonedScene = gltf.scene.clone()
-    gltfScene.value = clonedScene
-
-    // Setup shadows and materials
-    setupScene(clonedScene)
-    
-    // Calculate bounding box for camera positioning
-    calculateBoundingBox(clonedScene)
-
-    console.log('GLTF loaded successfully:', gltf)
+    console.log('Model URL created:', url)
 
   } catch (err) {
-    console.error('Error loading GLTF:', err)
-    error.value = `Failed to load GLTF: ${err instanceof Error ? err.message : 'Unknown error'}`
-    gltfScene.value = null
+    console.error('Error creating model URL:', err)
+    error.value = `Failed to create model URL: ${err instanceof Error ? err.message : 'Unknown error'}`
+    modelUrl.value = null
   } finally {
     loading.value = false
-  }
-}
-
-function setupScene(scene: THREE.Object3D) {
-  scene.traverse((child) => {
-    if (child instanceof THREE.Mesh) {
-      // Disable shadows to prevent proxy errors
-      child.castShadow = false
-      child.receiveShadow = false
-      
-      // Enhance materials
-      if (child.material) {
-        if (Array.isArray(child.material)) {
-          child.material.forEach(mat => enhanceMaterial(mat))
-        } else {
-          enhanceMaterial(child.material)
-        }
-      }
-    }
-  })
-}
-
-function enhanceMaterial(material: THREE.Material) {
-  if (material instanceof THREE.MeshStandardMaterial || 
-      material instanceof THREE.MeshPhysicalMaterial) {
-    material.envMapIntensity = 1
-    material.needsUpdate = true
-  }
-}
-
-function calculateBoundingBox(scene: THREE.Object3D) {
-  const box = new THREE.Box3().setFromObject(scene)
-  boundingBox.value = box
-  
-  // Get the size of the bounding box
-  const size = box.getSize(new THREE.Vector3())
-  const maxDim = Math.max(size.x, size.y, size.z)
-  
-  // Center the scene
-  const center = box.getCenter(new THREE.Vector3())
-  scene.position.sub(center)
-  
-  // Scale very small models up
-  if (maxDim < 0.5) {
-    const scale = 2 / maxDim
-    scene.scale.setScalar(scale)
-    console.log(`Scaling model by ${scale.toFixed(2)} (original size: ${maxDim.toFixed(4)})`)
-  }
-  
-  // Scale very large models down
-  if (maxDim > 20) {
-    const scale = 10 / maxDim
-    scene.scale.setScalar(scale)
-    console.log(`Scaling model by ${scale.toFixed(2)} (original size: ${maxDim.toFixed(2)})`)
   }
 }
 
@@ -277,13 +208,17 @@ function onModelClick(event: any) {
   console.log('Model clicked:', event)
 }
 
-function onCanvasCreated({ renderer }: { renderer: THREE.WebGLRenderer }) {
+function onCanvasCreated({ renderer }: any) {
   try {
-    // Disable shadows completely to prevent proxy errors
-    renderer.shadowMap.enabled = false
-    renderer.outputColorSpace = THREE.SRGBColorSpace
-    
-    // Set safer rendering options
+    renderer.shadowMap.enabled = props.shadows
+    if (renderer.shadowMap) {
+      renderer.shadowMap.type = 2 // PCFSoftShadowMap constant value
+    }
+    if (renderer.outputColorSpace !== undefined) {
+      renderer.outputColorSpace = 'srgb'
+    } else if (renderer.outputEncoding !== undefined) {
+      renderer.outputEncoding = 3001 // sRGBEncoding constant value
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     
     console.log('Canvas created successfully')
@@ -294,33 +229,17 @@ function onCanvasCreated({ renderer }: { renderer: THREE.WebGLRenderer }) {
 
 // Cleanup function
 function cleanup() {
-  if (gltfScene.value) {
-    // Cleanup Three.js resources
-    gltfScene.value.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry?.dispose()
-        if (Array.isArray(child.material)) {
-          child.material.forEach(mat => mat.dispose())
-        } else {
-          child.material?.dispose()
-        }
-      }
-    })
-    gltfScene.value = null
+  if (modelUrl.value) {
+    URL.revokeObjectURL(modelUrl.value)
+    modelUrl.value = null
   }
 }
 
 // Watch for prop changes
 watch(() => [props.buffers, props.fileName], () => {
-  cleanup() // Clean up previous scene
-  loadGLTF()
+  cleanup()
+  createModelUrl()
 }, { immediate: true })
-
-watch(() => props.shadows, (newShadows) => {
-  if (gltfScene.value) {
-    setupScene(gltfScene.value)
-  }
-})
 
 // Cleanup on unmount
 onUnmounted(() => {

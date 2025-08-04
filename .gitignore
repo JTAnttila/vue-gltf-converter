@@ -10,6 +10,7 @@ dist
 *.njsproj
 *.sln
 *.sw?
+.github
 
 # Nuxt dev/build outputs
 .output

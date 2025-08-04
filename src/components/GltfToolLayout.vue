@@ -52,7 +52,7 @@
         <!-- Center Panel: 3D Viewer with Overlay Controls -->
         <div class="viewer-panel" :style="{ width: centerPanelWidth + 'px' }">
           <div class="viewer-container">
-            <GltfViewer 
+            <SimpleViewer 
               :buffers="store.buffers"
               :fileName="store.fileName"
               :shadows="config.shadows"
@@ -177,6 +177,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useGltfStore } from '@/stores/useGltfStore'
+import SimpleViewer from '@/components/SimpleViewer.vue'
 import GltfViewer from '@/components/GltfViewer.vue'
 import TestViewer from '@/components/TestViewer.vue'
 import FileUploader from '@/components/FileUploader.vue'
@@ -730,6 +731,25 @@ watch(config, async () => {
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+.loading-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #666;
+}
+
+.loading-placeholder .spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
 }
 
 /* Responsive */
